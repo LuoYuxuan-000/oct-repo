@@ -1,0 +1,38 @@
+seed: 1337
+
+data:
+  dataset: octa500_usage1
+  processed_dir: data/processed/octa500_usage1
+
+polar:
+  R: 64       # 径向分辨率
+  U: 180      # elevation 分辨率
+  V: 180      # azimuth 分辨率
+
+training:
+  epochs: 300
+  batch_size: 10
+  lr: 1.0e-3
+  stride_uv: 3
+  upsample_uv: true
+  amp: true               # 混合精度训练
+
+  eval_every: 10          # 每 N 个 epoch 计算 SSIM/CD/Density
+  max_val_metrics: 30     # 验证时最多评估多少个样本
+
+  # 论文 Loss: alpha * SmoothL1 + PerceptualLoss
+  use_perceptual: true
+  perceptual:
+    layers: ["relu1_2", "relu2_2", "relu3_3"]
+    weights: [1.0, 1.0, 1.0]
+
+  # alpha 衰减策略: 前 50 epoch 固定为 1.0，之后线性衰减到 0
+  alpha:
+    alpha0: 1.0
+    warmup_epochs: 50
+    decay_to: 0.0
+
+eval:
+  # 论文去噪: 排除 OSM(5,5) 处的背景值
+  pointcloud_mask_mode: paper
+  background_ref_uv: [5, 5]

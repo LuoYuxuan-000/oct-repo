@@ -18,27 +18,31 @@ import yaml
 from pesnet.geometry.polar import PolarGridSpec, osm_to_normalized
 
 
-def load_splits(processed_dir: Path) -> Dict[str, List[str]]:
+def load_splits(processed_dir: Path | str) -> Dict[str, List[str]]:
     """读取 train/val/test 划分."""
+    processed_dir = Path(processed_dir)
     p = processed_dir / "splits.json"
     return json.loads(p.read_text(encoding="utf-8"))
 
 
-def load_meta(processed_dir: Path) -> dict:
+def load_meta(processed_dir: Path | str) -> dict:
     """读取数据集元信息."""
+    processed_dir = Path(processed_dir)
     p = processed_dir / "meta.yaml"
     if not p.exists():
         return {}
     return yaml.safe_load(p.read_text(encoding="utf-8")) or {}
 
 
-def load_template_grid(processed_dir: Path) -> np.ndarray:
+def load_template_grid(processed_dir: Path | str) -> np.ndarray:
     """读取模板极坐标网格 (R,U,V) uint8."""
+    processed_dir = Path(processed_dir)
     return np.load(processed_dir / "template_grid_uint8.npy").astype(np.uint8, copy=False)
 
 
-def load_sample_npz(processed_dir: Path, sample_id: str) -> Dict[str, np.ndarray]:
+def load_sample_npz(processed_dir: Path | str, sample_id: str) -> Dict[str, np.ndarray]:
     """读取单个样本的 npz 缓存."""
+    processed_dir = Path(processed_dir)
     p = processed_dir / "samples" / f"{sample_id}.npz"
     with np.load(p, allow_pickle=False) as z:
         return {k: z[k] for k in z.files}
@@ -47,7 +51,7 @@ def load_sample_npz(processed_dir: Path, sample_id: str) -> Dict[str, np.ndarray
 class ProcessedSubareaIndex:
     """将 (sample_id, sub_idx) 展平为线性索引，驱动 DataLoader."""
 
-    def __init__(self, processed_dir: Path, split: str) -> None:
+    def __init__(self, processed_dir: Path | str, split: str) -> None:
         self.processed_dir = processed_dir
         splits = load_splits(processed_dir)
         self.sample_ids = list(splits[split])
@@ -67,7 +71,7 @@ class ProcessedSubareaIndex:
         return self.items[idx]
 
 
-def build_torch_dataset(processed_dir: Path, split: str, spec: PolarGridSpec):
+def build_torch_dataset(processed_dir: Path | str, split: str, spec: PolarGridSpec):
     """构建 PyTorch Dataset.
 
     每个样本返回:

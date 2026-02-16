@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
-import os
 import random
 import time
 from pathlib import Path
@@ -76,6 +75,12 @@ def main() -> None:
         upsample_uv=bool(tr_cfg.get("upsample_uv", True)),
     )).to(device)
 
+    # 多卡 DataParallel
+    n_gpus = torch.cuda.device_count()
+    if n_gpus > 1:
+        model = torch.nn.DataParallel(model)
+        print(f"使用 {n_gpus} 块 GPU (DataParallel)")
+
     # --- 损失 + 优化器 ---
     epochs = int(tr_cfg.get("epochs", 300))
     lr = float(tr_cfg.get("lr", 1e-3))
@@ -95,7 +100,7 @@ def main() -> None:
 
     optim = torch.optim.Adam(model.parameters(), lr=lr)
     use_amp = bool(tr_cfg.get("amp", True)) and device.type == "cuda"
-    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
     # --- 输出目录 ---
     dataset_name = str(cfg.get("data", {}).get("dataset", "pesnet"))
@@ -107,11 +112,14 @@ def main() -> None:
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
 
+    # 获取底层模型（兼容 DataParallel）
+    raw_model = model.module if isinstance(model, torch.nn.DataParallel) else model
+
     # --- 断点续训 ---
     start_epoch, best_val = 0, float("inf")
     if args.resume:
         ckpt = torch.load(args.resume, map_location="cpu")
-        model.load_state_dict(ckpt["model"])
+        raw_model.load_state_dict(ckpt["model"])
         if "optim" in ckpt:
             optim.load_state_dict(ckpt["optim"])
         start_epoch = int(ckpt.get("epoch", -1)) + 1
@@ -134,7 +142,7 @@ def main() -> None:
                 if j >= max_val_metrics:
                     break
                 gs, gt, y = gs.to(device), gt.to(device), y.to(device)
-                with torch.amp.autocast("cuda", enabled=use_amp):
+                with torch.cuda.amp.autocast(enabled=use_amp):
                     pred = model(gs, gt).clamp(0.0, 1.0)
                 pred_np = pred[0, 0, 0].cpu().numpy()
                 gt_np = y[0, 0].cpu().numpy()
@@ -170,7 +178,7 @@ def main() -> None:
         train_sum, train_n = 0.0, 0
         for gs, gt, y, _ in train_loader:
             gs, gt, y = gs.to(device), gt.to(device), y.to(device)
-            with torch.amp.autocast("cuda", enabled=use_amp):
+            with torch.cuda.amp.autocast(enabled=use_amp):
                 pred = model(gs, gt)
                 loss = loss_fn(pred, y, epoch=epoch, total_epochs=epochs)
             optim.zero_grad(set_to_none=True)
@@ -186,7 +194,7 @@ def main() -> None:
         with torch.no_grad():
             for gs, gt, y, _ in val_loader:
                 gs, gt, y = gs.to(device), gt.to(device), y.to(device)
-                with torch.amp.autocast("cuda", enabled=use_amp):
+                with torch.cuda.amp.autocast(enabled=use_amp):
                     pred = model(gs, gt)
                     loss = loss_fn(pred, y, epoch=epoch, total_epochs=epochs)
                 val_sum += loss.item() * gs.size(0)
@@ -209,7 +217,7 @@ def main() -> None:
         (run_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
 
         # 保存 checkpoint
-        state = {"epoch": epoch, "model": model.state_dict(), "optim": optim.state_dict(),
+        state = {"epoch": epoch, "model": raw_model.state_dict(), "optim": optim.state_dict(),
                  "cfg": cfg, "best_val": best_val}
         if val_loss < best_val:
             best_val = val_loss

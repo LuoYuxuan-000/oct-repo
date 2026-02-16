@@ -6,16 +6,16 @@
 
 ## 方法概述
 
-<p align="center"><b>OCT 图像 → 极坐标体素化 → 双分支网络 → 2D OSM → 逆变换 → 3D 眼球形状</b></p>
+<p align="center"><b>OCT（分割 RPE）→ 点云（subarea / template）→ PVB → 双分支网络 → 2D OSM → 逆变换 → 3D 眼球形状</b></p>
 
 | 组件 | 说明 | 论文对应 |
 |------|------|---------|
 | **PVB** (Polar Voxelization Block) | 稀疏点云 → 极坐标密集网格 `(R,U,V)` | Sec 2.2, Eq.2-4 |
 | **S-branch** (Shape regression) | 局部 subarea 特征提取 (5 层 RB) | Fig.1(b) |
-| **A-branch** (Anatomical prior) | 模板先验特征提取 (5 层 RB, 权重不共享) | Fig.1(b) |
-| **RFB** (R-wise Fusion Block) | R 维交错融合两分支特征 | Fig.1(c) |
-| **Loss** | α·SmoothL1 + VGG16 Perceptual Loss | Sec 2.1, Table 2 |
-| **OSM → 3D** | 逆极坐标变换 + 论文去噪策略 | Sec 2.2 |
+| **A-branch** (Anatomical prior) | 模板先验分支 (5 层 RB, unshared weights) | Fig.1(b), Table 2 |
+| **RFB** (Radius-wise Fusion Block) | 沿 R 轴交错融合两分支特征 | Fig.1(c) |
+| **Loss** | α·SmoothL1 + Perceptual Loss | Sec 2.1, Table 2 |
+| **OSM → 3D** | 逆极坐标变换 + 背景掩码 + 连通分量滤波 + SOR | Method + Impl. Details |
 
 ## 项目结构
 
@@ -58,7 +58,7 @@ python tools/prepare_octa500.py \
 生成:
 - `splits.json` — train/val/test 划分 (70%/20%/10%)
 - `samples/{id}.npz` — 每个 volume 的 GT OSM + 5 个 subarea 极坐标网格
-- `template_grid_uint8.npy` — 模板（top-7 训练样本平均 + 高斯平滑）
+- `template_grid_uint8.npy` — 模板（训练集选 7 个高质量 GT OSM 平均 + 高斯平滑）
 
 ### 2. 训练
 
@@ -94,11 +94,11 @@ python -m pytest tests/ -v
 | 极坐标网格 | R=64, U=180, V=180 | R=64, U=180, V=180 |
 | 极坐标原点 | top en-face 中心 (W/2, H/2, 0) | 同上 |
 | 网络 | 双分支 unshared + RFB 融合 | 同上 |
-| 损失 | α·SmoothL1 + Perceptual(VGG16) | 同上 |
+| 损失 | α·SmoothL1 + Perceptual Loss | 同上（Perceptual 采用 VGG16） |
 | α 衰减 | 前 50 epoch 固定，之后线性→0 | 同上 |
-| 训练 | Adam, lr=0.001, batch=10, 300 epochs | 同上 |
+| 训练 | Adam, lr=0.001, batch=10, 300 epochs | Adam, lr=0.001, batch=4, 300 epochs（显存限制） |
 | 评估指标 | CD / SSIM / Density | 同上 |
-| 去噪策略 | OSM(u,v) != OSM(5,5) | 同上 |
+| 去噪策略 | Implementation Details | 背景掩码 + 连通分量滤波 + SOR |
 
 ## 评估指标
 
@@ -121,11 +121,11 @@ python -m pytest tests/ -v
 
 ### 测试集指标 (best checkpoint, 150 个样本)
 
-| 指标 | 本复现 | 论文报告 |
+| 指标 | 本复现 | 论文报告 (Table 1) |
 |------|--------|----------|
 | **CD** ↓ | 31.23 | 9.52 |
-| **SSIM** ↑ | 0.786 | 0.844 |
-| **Density** ↓ | 0.173 | 0.248 |
+| **SSIM** ↑ | 0.786 | 0.781 |
+| **Density** ↓ | 0.173 | 0.013 |
 
 ### 训练过程 (验证集，每 10 epoch 评估一次)
 
@@ -146,7 +146,7 @@ python -m pytest tests/ -v
 > 1. **数据集不同**: 论文使用的是作者私有的临床 OCT 数据集，本复现使用公开的 OCTA-500 数据集。两个数据集在成像设备、扫描范围、分辨率、样本量等方面均存在差异，直接影响模型的训练和评估表现。
 > 2. **GT 构造方式不同**: 论文的 GT 眼球形状来自临床 biometry 设备测量，而本复现基于 OCTA-500 的 OCT 体数据自行构造 GT OSM，构造精度和覆盖范围与原始数据存在差距。
 > 3. **CD 均值受异常样本影响**: 本复现中大部分样本的 CD 在 10~20 之间，但少数异常样本（如 10089、10057，CD > 200）显著拉高了均值。去除这些异常值后，CD 中位数约为 15。
-> 4. **SSIM 表现接近**: 验证集最佳 SSIM 达到 0.908（epoch 280），测试集 SSIM=0.786，与论文的 0.844 在同一量级，说明网络结构复现是有效的。
+> 4. **SSIM 表现接近**: 验证集最佳 SSIM 达到 0.908（epoch 280），测试集 SSIM=0.786，与论文的 0.781 基本持平，说明网络结构复现是有效的。
 >
 > 综上，本复现验证了 PESNet 方法在公开数据集上的可行性，指标差异主要源于数据而非方法。
 
